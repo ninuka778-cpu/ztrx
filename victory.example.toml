@@ -17,3 +17,13 @@ game_dir = 'D:\victory-data\game'
 # Other Xbox Series titles used to test platform-level code.
 # env: VICTORY_TEST_TITLES (separated by ';')
 test_titles = []
+
+[performance]
+# `performance` (default) targets 30 fps with 720p and asynchronous GPU work.
+# `balanced` uses 1080p; `compatibility` restores the old 4K/synchronous path.
+# env: VICTORY_PERFORMANCE; CLI: --performance <name>
+# profile = 'performance'
+
+# Optional internal resolution. It overrides the profile's resolution.
+# env: VICTORY_DISPLAY_MODE; scripts\play.ps1: -Resolution WxH
+# display_mode = '1280x720'

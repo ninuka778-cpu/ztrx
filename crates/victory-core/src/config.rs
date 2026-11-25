@@ -1,4 +1,4 @@
-//! Where the user's files live.
+//! Where the user's files live, and the performance profile to start with.
 //!
 //! Resolution order for each value: environment variable, then the config
 //! file (`VICTORY_CONFIG`, else `./victory.toml`), then the default.
@@ -24,6 +24,16 @@ pub struct Config {
     pub test_titles: Vec<PathBuf>,
     /// The config file that was read, if any.
     pub source: Option<PathBuf>,
+    /// Performance profile and display-mode override from the config file or
+    /// environment. The GPU defaults are resolved by `crate::performance`.
+    pub performance: PerformanceConfig,
+}
+
+/// The two performance values a user can put in `victory.toml`.
+#[derive(Debug, Default, Clone)]
+pub struct PerformanceConfig {
+    pub profile: Option<String>,
+    pub display_mode: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -31,6 +41,8 @@ pub struct Config {
 struct FileConfig {
     #[serde(default)]
     paths: FilePaths,
+    #[serde(default)]
+    performance: FilePerformance,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -41,6 +53,13 @@ struct FilePaths {
     data_dir: Option<PathBuf>,
     #[serde(default)]
     test_titles: Vec<PathBuf>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FilePerformance {
+    profile: Option<String>,
+    display_mode: Option<String>,
 }
 
 impl Config {
@@ -70,33 +89,49 @@ impl Config {
             }
             None => (None, FileConfig::default()),
         };
-        Self::resolve(parsed.paths, source, |k| std::env::var_os(k))
+        Self::resolve(parsed, source, |k| std::env::var_os(k))
     }
 
     fn resolve(
-        file: FilePaths,
+        file: FileConfig,
         source: Option<PathBuf>,
         env: impl Fn(&str) -> Option<std::ffi::OsString>,
     ) -> Result<Self> {
+        let FileConfig { paths, performance } = file;
+        let FilePaths {
+            game_dir,
+            cache_dir,
+            data_dir,
+            test_titles,
+        } = paths;
         let env_path = |k: &str| env(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+        let env_string = |k: &str| {
+            env(k)
+                .filter(|v| !v.is_empty())
+                .and_then(|v| v.into_string().ok())
+        };
         let test_titles = match env("VICTORY_TEST_TITLES") {
             Some(v) if !v.is_empty() => std::env::split_paths(&v)
                 .filter(|p| !p.as_os_str().is_empty())
                 .collect(),
-            _ => file.test_titles,
+            _ => test_titles,
         };
         let cache_dir = env_path("VICTORY_CACHE_DIR")
-            .or(file.cache_dir)
+            .or(cache_dir)
             .map_or_else(|| default_dir("cache"), Ok)?;
         let data_dir = env_path("VICTORY_DATA_DIR")
-            .or(file.data_dir)
+            .or(data_dir)
             .map_or_else(|| default_dir("data"), Ok)?;
         Ok(Config {
-            game_dir: env_path("VICTORY_GAME_DIR").or(file.game_dir),
+            game_dir: env_path("VICTORY_GAME_DIR").or(game_dir),
             cache_dir,
             data_dir,
             test_titles,
             source,
+            performance: PerformanceConfig {
+                profile: env_string("VICTORY_PERFORMANCE").or(performance.profile),
+                display_mode: env_string("VICTORY_DISPLAY_MODE").or(performance.display_mode),
+            },
         })
     }
 
@@ -141,51 +176,90 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
 
+    fn file(paths: FilePaths) -> FileConfig {
+        FileConfig {
+            paths,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn environment_overrides_file() {
-        let file = FilePaths {
+        let paths = FilePaths {
             game_dir: Some("from-file".into()),
             cache_dir: Some("cache-from-file".into()),
             ..Default::default()
         };
         let env = |k: &str| (k == "VICTORY_GAME_DIR").then(|| OsString::from("from-env"));
-        let cfg = Config::resolve(file, None, env).unwrap();
+        let cfg = Config::resolve(file(paths), None, env).unwrap();
         assert_eq!(cfg.game_dir.unwrap(), PathBuf::from("from-env"));
         assert_eq!(cfg.cache_dir, PathBuf::from("cache-from-file"));
     }
 
     #[test]
     fn empty_env_values_are_ignored() {
-        let file = FilePaths {
+        let paths = FilePaths {
             game_dir: Some("from-file".into()),
             ..Default::default()
         };
         let env = |k: &str| (k == "VICTORY_GAME_DIR").then(OsString::new);
-        let cfg = Config::resolve(file, None, env).unwrap();
+        let cfg = Config::resolve(file(paths), None, env).unwrap();
         assert_eq!(cfg.game_dir.unwrap(), PathBuf::from("from-file"));
     }
 
     #[test]
     fn empty_test_titles_env_is_ignored() {
-        let file = FilePaths {
+        let paths = FilePaths {
             test_titles: vec!["from-file".into()],
             ..Default::default()
         };
         let env = |k: &str| (k == "VICTORY_TEST_TITLES").then(OsString::new);
-        let cfg = Config::resolve(file, None, env).unwrap();
+        let cfg = Config::resolve(file(paths), None, env).unwrap();
         assert_eq!(cfg.test_titles, vec![PathBuf::from("from-file")]);
     }
 
     #[test]
     fn test_titles_env_splits_paths() {
         let value = std::env::join_paths(["first", "second"]).unwrap();
-        let file = FilePaths::default();
         let env = |k: &str| (k == "VICTORY_TEST_TITLES").then(|| value.clone());
-        let cfg = Config::resolve(file, None, env).unwrap();
+        let cfg = Config::resolve(file(FilePaths::default()), None, env).unwrap();
         assert_eq!(
             cfg.test_titles,
             vec![PathBuf::from("first"), PathBuf::from("second")]
         );
+    }
+
+    #[test]
+    fn performance_environment_overrides_file() {
+        let config = FileConfig {
+            paths: FilePaths::default(),
+            performance: FilePerformance {
+                profile: Some("balanced".into()),
+                display_mode: Some("1920x1080".into()),
+            },
+        };
+        let env = |k: &str| match k {
+            "VICTORY_PERFORMANCE" => Some(OsString::from("performance")),
+            "VICTORY_DISPLAY_MODE" => Some(OsString::from("1280x720")),
+            _ => None,
+        };
+        let cfg = Config::resolve(config, None, env).unwrap();
+        assert_eq!(cfg.performance.profile.as_deref(), Some("performance"));
+        assert_eq!(cfg.performance.display_mode.as_deref(), Some("1280x720"));
+    }
+
+    #[test]
+    fn performance_file_values_are_kept() {
+        let config = FileConfig {
+            paths: FilePaths::default(),
+            performance: FilePerformance {
+                profile: Some("compatibility".into()),
+                display_mode: Some("1600x900".into()),
+            },
+        };
+        let cfg = Config::resolve(config, None, |_| None).unwrap();
+        assert_eq!(cfg.performance.profile.as_deref(), Some("compatibility"));
+        assert_eq!(cfg.performance.display_mode.as_deref(), Some("1600x900"));
     }
 
     #[test]

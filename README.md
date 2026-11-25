@@ -15,7 +15,7 @@ Tested on Windows 11 with an **NVIDIA GeForce RTX 3050** (8 GB):
 | Boot, first-boot screens, intro, opening credits | works |
 | Prologue | playable from the cell to the boat chase: cell, cafeteria, robbery, police chase (wanted level, minimap), boat, binoculars |
 | Stability | 1 h 30 min+ in one session without a crash |
-| Frame rate | 1-3 fps in the world (the first run is slower while shaders translate; they are cached after that) |
+| Frame rate | 1-3 fps on the old compatibility path; the default `performance` profile targets 30 fps with a 720p internal mode and asynchronous GPU work (hardware/scene dependent; not yet measured on every machine). The first run is slower while shaders translate; they are cached after that. |
 | Known problems | anything in shadow is black and bright scenes overexpose (the game's ray-traced lighting does not run yet); some blocky artifacts; boats sit low in the water |
 
 ## Requirements
@@ -42,10 +42,37 @@ powershell -ExecutionPolicy Bypass -File scripts\play.ps1 -Game "<your game fold
 (a DualShock/DualSense through DS4Windows works). With no pad connected the
 keyboard acts as one while the game window has focus.
 
-## Faster settings (optional, off by default)
+## Performance profiles (30 fps target)
 
-`VICTORY_RELAY=2`, or `VICTORY_LATE_WAIT=3 VICTORY_WIDE_BACK=1` cut frame
-time on the test machines. Set them in PowerShell before running the script.
+The launcher and `victory run` now start in the `performance` profile. It is
+a bundle of the back end's measured fast paths: CPU/GPU overlap, a copy-back
+relay thread, parallel memory refreshes and comparisons, batched GPU
+bookkeeping, GPU-local buffer copies, and a 1280x720 internal display mode
+instead of 4K. The title still owns its frame pacing; 30 fps needs a 33.3 ms
+frame and is a target, not a guarantee on every GPU or scene. See
+[docs/performance-30fps.md](docs/performance-30fps.md) for the bottleneck
+analysis and validation procedure.
+
+```powershell
+# Default: 720p + fast scheduling.
+.\scripts\play.ps1 -Game "<your game folder>\<the game's exe>"
+
+# Better image, or the old synchronous 4K path for diagnosis.
+.\scripts\play.ps1 -Game "..." -Performance balanced
+.\scripts\play.ps1 -Game "..." -Performance compatibility
+
+# Try another internal resolution without changing the profile's switches.
+.\scripts\play.ps1 -Game "..." -Resolution 960x540
+```
+
+Profiles can also be selected with `VICTORY_PERFORMANCE`, `--performance`, or
+`[performance].profile` in `victory.toml`. Every individual `VICTORY_*`
+switch you set explicitly still wins; for example,
+`VICTORY_DISPLAY_MODE=1920x1080` keeps the fast scheduling but raises the
+resolution. `VICTORY_PERFORMANCE=compatibility` restores the old defaults
+for every switch you have not set explicitly.
+The first run remains slow while shaders translate; use the cached-shader run
+to judge the steady-state frame rate.
 
 ## Debugging switches
 
