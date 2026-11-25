@@ -21,6 +21,9 @@ use clap::{Parser, Subcommand, ValueEnum};
     about = "Run an Xbox Series title natively on Windows"
 )]
 struct Cli {
+    /// GPU scheduling/quality preset used when starting a title.
+    #[arg(long, value_enum, default_value_t = Performance::Auto, global = true)]
+    performance: Performance,
     #[command(subcommand)]
     command: Command,
 }
@@ -121,14 +124,44 @@ enum Console {
     SeriesS,
 }
 
+/// `Auto` reads `VICTORY_PERFORMANCE` / `victory.toml` and defaults to the
+/// 30 FPS profile; the other values override both.
+#[derive(Clone, Copy, ValueEnum)]
+enum Performance {
+    Auto,
+    Compatibility,
+    Balanced,
+    Performance,
+}
+
+impl Performance {
+    fn profile(self) -> Option<victory_core::Profile> {
+        use victory_core::Profile as P;
+        match self {
+            Self::Auto => None,
+            Self::Compatibility => Some(P::Compatibility),
+            Self::Balanced => Some(P::Balanced),
+            Self::Performance => Some(P::Performance),
+        }
+    }
+}
+
 fn main() -> Result<()> {
-    victory_core::logging::init("info");
     // The audio recorder `run` starts for `VICTORY_AUDIO_CAPTURE`.
     #[cfg(all(windows, feature = "diagnostics"))]
     if victory_hle::modules::audio::capture::child() {
         return Ok(());
     }
     let cli = Cli::parse();
+    // SAFETY: this is the first environment write in the process, before
+    // logging, loading the title or starting any worker thread.
+    let profile = unsafe { victory_core::performance::apply(cli.performance.profile()) };
+    victory_core::logging::init("info");
+    println!(
+        "performance    {} ({} fps target)",
+        profile.as_str(),
+        victory_core::TARGET_FPS
+    );
     match cli.command {
         Command::Inspect {
             file,
@@ -191,6 +224,14 @@ fn show_config() -> Result<()> {
     println!("game_dir    : {}", status(&cfg.game_dir));
     println!("cache_dir   : {}", cfg.cache_dir.display());
     println!("data_dir    : {}", cfg.data_dir.display());
+    println!(
+        "performance : {}",
+        cfg.performance.profile.as_deref().unwrap_or("performance")
+    );
+    println!(
+        "display_mode: {}",
+        cfg.performance.display_mode.as_deref().unwrap_or("(layer default)")
+    );
     for t in &cfg.test_titles {
         println!("test_title  : {}", status(&Some(t.clone())));
     }

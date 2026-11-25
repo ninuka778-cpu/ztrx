@@ -29,7 +29,7 @@ Converting them ahead of time from files is only a warm-up.
 
 | Crate | Role |
 |-------|------|
-| `victory-core` | config, asset-policy guard, logging |
+| `victory-core` | config, performance presets, asset-policy guard, logging |
 | `victory-pe` | read-only PE32+ and import-library analysis |
 | `victory-loader` | prepare, map, bind and start the title image |
 | `victory-hle` | console API implementations, host pass-through policy |
